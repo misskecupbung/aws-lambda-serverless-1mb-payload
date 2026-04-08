@@ -1,11 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
-
 Description: Lambda 1MB payload — async invocation, SQS, and EventBridge demo
-
 Resources:
-
   # ---- IAM ----
-
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -38,16 +34,14 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
-                Resource: !GetAtt ConsumerFunction.Arn
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:large-payload-consumer"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogDelivery
                   - logs:PutLogEvents
                 Resource: "*"
-
   # ---- SQS ----
-
   # SQS extended limit: up to 1 MB per message.
   # MaximumMessageSize: 1048576 bytes (1,048,576 = 1 MB exactly).
   LargePayloadQueue:
@@ -57,14 +51,11 @@ Resources:
       MaximumMessageSize: 1048576
       VisibilityTimeout: 60
       MessageRetentionPeriod: 3600
-
   # ---- EventBridge ----
-
   LargePayloadBus:
     Type: AWS::Events::EventBus
     Properties:
       Name: large-payload-bus
-
   EventToLambdaRule:
     Type: AWS::Events::Rule
     Properties:
@@ -78,7 +69,6 @@ Resources:
       Targets:
         - Id: ConsumerLambdaTarget
           Arn: !GetAtt ConsumerFunction.Arn
-
   ConsumerLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -86,9 +76,7 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt EventToLambdaRule.Arn
-
   # ---- Lambda ----
-
   # Consumer function — receives large payloads and logs summary
   ConsumerFunction:
     Type: AWS::Lambda::Function
@@ -109,7 +97,6 @@ Resources:
               payload_bytes = sys.getsizeof(json.dumps(event))
               logger.info("Received from %s: %.1f KB", source, payload_bytes / 1024)
               return {"status": "ok", "source": source, "size_kb": round(payload_bytes / 1024, 1)}
-
   # SQS event source mapping — Consumer also processes SQS messages
   SQSTrigger:
     Type: AWS::Lambda::EventSourceMapping
@@ -118,7 +105,6 @@ Resources:
       EventSourceArn: !GetAtt LargePayloadQueue.Arn
       BatchSize: 1
       Enabled: true
-
   # Producer function — generates large payloads and sends them via three paths
   ProducerFunction:
     Type: AWS::Lambda::Function
@@ -141,7 +127,6 @@ Resources:
           logger.setLevel("INFO")
           def handler(event, context):
               return {"status": "placeholder — see deploy.sh for real code"}
-
 Outputs:
   ProducerFunctionName:
     Value: !Ref ProducerFunction
