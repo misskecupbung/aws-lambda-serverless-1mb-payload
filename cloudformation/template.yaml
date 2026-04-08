@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Lambda 1MB payload — async invocation, SQS, and EventBridge demo
+
+Resources:
+
+  # ---- IAM ----
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambda-1mb-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: lambda-1mb-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt LargePayloadQueue.Arn
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt LargePayloadBus.Arn
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt ConsumerFunction.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogDelivery
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # ---- SQS ----
+
+  # SQS extended limit: up to 1 MB per message.
+  # MaximumMessageSize: 1048576 bytes (1,048,576 = 1 MB exactly).
+  LargePayloadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: large-payload-queue
+      MaximumMessageSize: 1048576
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 3600
+
+  # ---- EventBridge ----
+
+  LargePayloadBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: large-payload-bus
+
+  EventToLambdaRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: large-payload-rule
+      EventBusName: !Ref LargePayloadBus
+      EventPattern:
+        source:
+          - "lab.producer"
+        detail-type:
+          - "LargePayloadEvent"
+      Targets:
+        - Id: ConsumerLambdaTarget
+          Arn: !GetAtt ConsumerFunction.Arn
+
+  ConsumerLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ConsumerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventToLambdaRule.Arn
+
+  # ---- Lambda ----
+
+  # Consumer function — receives large payloads and logs summary
+  ConsumerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: large-payload-consumer
+      Runtime: python3.12
+      Handler: consumer.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          import json, logging, sys
+          logger = logging.getLogger()
+          logger.setLevel("INFO")
+          def handler(event, context):
+              source = event.get("source", "async-invoke")
+              payload_bytes = sys.getsizeof(json.dumps(event))
+              logger.info("Received from %s: %.1f KB", source, payload_bytes / 1024)
+              return {"status": "ok", "source": source, "size_kb": round(payload_bytes / 1024, 1)}
+
+  # SQS event source mapping — Consumer also processes SQS messages
+  SQSTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !GetAtt ConsumerFunction.Arn
+      EventSourceArn: !GetAtt LargePayloadQueue.Arn
+      BatchSize: 1
+      Enabled: true
+
+  # Producer function — generates large payloads and sends them via three paths
+  ProducerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: large-payload-producer
+      Runtime: python3.12
+      Handler: producer.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          CONSUMER_FUNCTION_ARN: !GetAtt ConsumerFunction.Arn
+          SQS_QUEUE_URL: !Ref LargePayloadQueue
+          EVENT_BUS_NAME: !Ref LargePayloadBus
+      Code:
+        ZipFile: |
+          import boto3, json, logging, os, random, string, sys
+          logger = logging.getLogger()
+          logger.setLevel("INFO")
+          def handler(event, context):
+              return {"status": "placeholder — see deploy.sh for real code"}
+
+Outputs:
+  ProducerFunctionName:
+    Value: !Ref ProducerFunction
+  ConsumerFunctionName:
+    Value: !Ref ConsumerFunction
+  QueueUrl:
+    Value: !Ref LargePayloadQueue
+  EventBusName:
+    Value: !Ref LargePayloadBus
