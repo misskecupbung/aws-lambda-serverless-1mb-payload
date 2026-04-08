@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Lambda 1MB payload — async invocation, SQS, and EventBridge demo
+Description: Lambda 1MB payload async invocation, SQS, and EventBridge demo
 Resources:
   # ---- IAM ----
   LambdaExecutionRole:
